@@ -1,0 +1,4 @@
+node_modules/
+vinted-state.json
+.DS_Store
+.env
