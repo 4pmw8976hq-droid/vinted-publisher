@@ -6,7 +6,6 @@ const axios = require('axios');
 const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const stream = require('stream');
-const { execSync } = require('child_process');
 const pipeline = promisify(stream.pipeline);
 
 const app = express();
@@ -19,25 +18,12 @@ async function downloadImage(url, dest) {
   await pipeline(response.data, createWriteStream(dest));
 }
 
-function ensurePlaywrightBrowsers() {
-  try {
-    console.log('Verifico installazione browser Playwright...');
-    execSync('npx playwright install chromium', { stdio: 'inherit' });
-    console.log('Browser installati correttamente.');
-  } catch (err) {
-    console.error('Errore nell’installazione dei browser:', err);
-  }
-}
-
 app.post('/publish', async (req, res) => {
   const { title, description, price, imageUrl, recordId } = req.body;
 
   if (!title || !description || !price || !imageUrl) {
     return res.status(400).json({ error: 'Mancano campi obbligatori (title, description, price, imageUrl)' });
   }
-
-  // Assicura che i browser siano installati
-  ensurePlaywrightBrowsers();
 
   const browser = await chromium.launch({ headless: true });
 
@@ -102,4 +88,4 @@ app.post('/publish', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server in ascolto sulla porta ${port}`);
-});
+});O
