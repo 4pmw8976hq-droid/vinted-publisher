@@ -6,6 +6,7 @@ const axios = require('axios');
 const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const stream = require('stream');
+const { execSync } = require('child_process');
 const pipeline = promisify(stream.pipeline);
 
 const app = express();
@@ -18,72 +19,78 @@ async function downloadImage(url, dest) {
   await pipeline(response.data, createWriteStream(dest));
 }
 
-// Endpoint per pubblicare su Vinted
+function ensurePlaywrightBrowsers() {
+  try {
+    console.log('Verifico installazione browser Playwright...');
+    execSync('npx playwright install chromium', { stdio: 'inherit' });
+    console.log('Browser installati correttamente.');
+  } catch (err) {
+    console.error('Errore nell’installazione dei browser:', err);
+  }
+}
+
 app.post('/publish', async (req, res) => {
   const { title, description, price, imageUrl, recordId } = req.body;
 
-  // Validazione
   if (!title || !description || !price || !imageUrl) {
     return res.status(400).json({ error: 'Mancano campi obbligatori (title, description, price, imageUrl)' });
   }
 
-  const browser = await chromium.launch({ headless: true });
-  const statePath = path.join(__dirname, 'vinted-state.json');
+  // Assicura che i browser siano installati
+  ensurePlaywrightBrowsers();
 
-  // Carica lo stato di login: prima prova variabile d'ambiente, poi file locale
+  const browser = await chromium.launch({ headless: true });
+
+  // Gestione dello stato di login: prima dalla variabile d'ambiente, poi dal file
   let context;
   if (process.env.VINTED_STATE) {
     try {
       const state = JSON.parse(process.env.VINTED_STATE);
       context = await browser.newContext({ storageState: state });
-    } catch (e) {
+    } catch (err) {
       await browser.close();
-      return res.status(500).json({ error: 'Errore nel parsing della variabile VINTED_STATE', details: e.message });
+      return res.status(500).json({ error: 'Errore nel parsing di VINTED_STATE', detail: err.message });
     }
-  } else if (fs.existsSync(statePath)) {
-    context = await browser.newContext({ storageState: statePath });
   } else {
-    await browser.close();
-    return res.status(500).json({ error: 'Stato di login non trovato. Imposta VINTED_STATE o fornisci il file vinted-state.json' });
+    const statePath = path.join(__dirname, 'vinted-state.json');
+    if (fs.existsSync(statePath)) {
+      context = await browser.newContext({ storageState: statePath });
+    } else {
+      await browser.close();
+      return res.status(500).json({ error: 'Stato di login non trovato. Imposta VINTED_STATE o fornisci il file vinted-state.json' });
+    }
   }
 
   const page = await context.newPage();
 
   try {
-    // Gestisci immagine: se è un URL, scarica; altrimenti usa il percorso locale
     let imagePath;
     if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
       const tempDir = '/tmp';
       imagePath = path.join(tempDir, `${Date.now()}.jpg`);
       await downloadImage(imageUrl, imagePath);
     } else {
-      imagePath = imageUrl;  // assume sia un percorso assoluto valido
+      imagePath = imageUrl;
     }
 
-    // Vai alla pagina di upload di Vinted
     await page.goto('https://www.vinted.it/upload');
     await page.waitForSelector('input[name="title"]', { timeout: 10000 });
 
-    // Compila i campi
     await page.fill('input[name="title"]', title);
     await page.fill('textarea[name="description"]', description);
     await page.fill('input[name="price"]', price);
 
-    // Carica l'immagine
     const fileInput = await page.$('input[type="file"]');
     await fileInput.setInputFiles(imagePath);
 
-    // Se Vinted richiede categoria, puoi sbloccare commentando le righe sotto
+    // Se serve selezionare categoria, decommenta e adatta:
     // await page.click('select[name="category"]');
     // await page.selectOption('select[name="category"]', 'Home & Living');
 
-    // Clicca sul pulsante di invio
     await page.click('button[type="submit"]');
     await page.waitForNavigation({ timeout: 30000 });
 
     const listingUrl = page.url();
-
-    // Risposta positiva
     res.json({ success: true, url: listingUrl, recordId });
   } catch (error) {
     console.error('Errore durante la pubblicazione:', error.message);
